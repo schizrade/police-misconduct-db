@@ -1,0 +1,7 @@
+.dashboard h2 { margin-bottom: 2rem; color: #2c3e50; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin-bottom: 3rem; }
+.stat-card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
+.stat-card h3 { color: #7f8c8d; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 0.5rem; }
+.stat-number { font-size: 2.5rem; font-weight: 700; color: #2c3e50; margin: 0; }
+.recent-incidents { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.recent-incidents h3 { margin-bottom: 1.5rem; color: #2c3e50; }

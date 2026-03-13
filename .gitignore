@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+*.env
+.env
+
+# Node
+node_modules/
+npm-debug.log*
+build/
+.DS_Store
+
+# Database
+*.sql.bak
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Uploads (runtime data — not committed)
+backend/uploads/*
+!backend/uploads/.gitkeep
