@@ -34,7 +34,7 @@ info "Step 1: Updating apt and installing system dependencies..."
 apt update -qq
 apt install -y \
     curl wget gnupg lsb-release ca-certificates \
-    python3 python3-venv python3-dev python3-pip \
+    python3.11 python3.11-venv python3.11-dev python3-pip \
     postgresql postgresql-contrib \
     nginx \
     libpq-dev \
@@ -45,11 +45,17 @@ apt install -y \
 
 # ---------- Node.js 18 LTS via NodeSource ----------
 info "Installing Node.js 18 LTS..."
-if ! command -v node &>/dev/null || [ "$(node -e 'process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)'; echo $?)" = "1" ]; then
+if ! command -v node &>/dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - 2>/dev/null
     apt install -y nodejs
 else
-    info "Node.js $(node --version) already installed, skipping."
+    NODE_MAJOR=$(node -e 'process.stdout.write(process.version.split(".")[0].slice(1))')
+    if [ "$NODE_MAJOR" -lt 18 ]; then
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash - 2>/dev/null
+        apt install -y nodejs
+    else
+        info "Node.js $(node --version) already installed, skipping."
+    fi
 fi
 
 info "Installed versions:"
@@ -60,7 +66,7 @@ echo "  nginx  : $(nginx -v 2>&1)"
 echo "  psql   : $(psql --version)"
 
 # ==========================================================
-# STEP 2 — PostgreSQL
+# STEP 2 — PostgreSQL + pg_hba.conf patch
 # ==========================================================
 info "Step 2: Configuring PostgreSQL..."
 
@@ -68,37 +74,39 @@ systemctl start postgresql
 systemctl enable postgresql
 
 # ----------------------------------------------------------
-# Patch pg_hba.conf so that misconduct_user (and any other
-# non-system user) can authenticate with a password over the
-# local Unix socket.  Ubuntu's default is "peer" for local
-# connections, which only works when the OS username matches
-# the PostgreSQL username — misconduct_user is not an OS user.
-#
-# We insert a scram-sha-256 rule for misconduct_user BEFORE
-# the existing local rules so it takes priority.
+# Detect the installed PostgreSQL version and patch
+# pg_hba.conf to allow misconduct_user to log in with a
+# password via TCP (127.0.0.1).  Ubuntu defaults to "peer"
+# auth for local connections — that only works when the OS
+# username matches the PG username, which it won't here.
 # ----------------------------------------------------------
 PG_VERSION=$(pg_lsclusters -h | awk 'NR==1{print $1}')
 HBA_FILE="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
+info "PostgreSQL ${PG_VERSION} detected — hba file: ${HBA_FILE}"
 
-info "Patching pg_hba.conf at ${HBA_FILE} ..."
-
-# Only add the rule if it isn't already there
 if ! grep -q "misconduct_user" "$HBA_FILE"; then
-    # Insert after the "# TYPE" header comment block (first non-comment line)
-    sed -i '/^local\s/i # Added by misconduct-db setup\nlocal   misconduct_db   misconduct_user                 scram-sha-256\nhost    misconduct_db   misconduct_user  127.0.0.1/32    scram-sha-256\nhost    misconduct_db   misconduct_user  ::1/128         scram-sha-256' "$HBA_FILE"
-    info "pg_hba.conf updated — misconduct_user may now log in with a password."
+    # Prepend rules before the first "local" line so they win
+    sed -i '/^local[[:space:]]/i # --- misconduct-db (added by setup.sh) ---\nlocal   misconduct_db   misconduct_user                 scram-sha-256\nhost    misconduct_db   misconduct_user  127.0.0.1\/32   scram-sha-256\nhost    misconduct_db   misconduct_user  ::1\/128        scram-sha-256\n# --- end misconduct-db ---' "$HBA_FILE"
+    info "pg_hba.conf patched with password-auth rules for misconduct_user."
 else
-    info "pg_hba.conf already contains a rule for misconduct_user — skipping."
+    info "pg_hba.conf already has misconduct_user rules — skipping."
 fi
 
 systemctl reload postgresql
 
+# ----------------------------------------------------------
+# Prompt for DB password
+# ----------------------------------------------------------
 echo ""
 read -sp "  Enter a password for the database user 'misconduct_user': " DB_PASSWORD
 echo ""
 [ -z "$DB_PASSWORD" ] && err_exit "Database password cannot be empty."
 
-# Create the role and database as the postgres superuser (peer auth — always works)
+# ----------------------------------------------------------
+# Create role + database as the postgres superuser.
+# We use peer auth here (sudo -u postgres) which always works.
+# ----------------------------------------------------------
+info "Creating database role and database..."
 sudo -u postgres psql <<SQL
 DO \$\$
 BEGIN
@@ -115,31 +123,54 @@ CREATE DATABASE misconduct_db OWNER misconduct_user;
 GRANT ALL PRIVILEGES ON DATABASE misconduct_db TO misconduct_user;
 SQL
 
-# Grant schema-level privileges (run as postgres on the target db)
+# Grant schema-level privileges so the app user can create
+# and use objects at runtime
 sudo -u postgres psql -d misconduct_db <<SQL
 GRANT ALL ON SCHEMA public TO misconduct_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO misconduct_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO misconduct_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO misconduct_user;
 SQL
 
 # ----------------------------------------------------------
-# Load the schema as the postgres superuser — avoids peer
-# auth entirely.  The schema itself grants ownership/privs
-# to misconduct_user via the OWNER clauses and seed INSERTs.
+# Load the schema.
+#
+# Two problems to solve:
+#   1. postgres OS user can't read files owned by root in
+#      APP_DIR — so we copy the schema to /tmp first.
+#   2. Objects created by the postgres superuser would be
+#      owned by postgres, not misconduct_user, so the app
+#      can't alter them at runtime.  We wrap the schema in
+#      SET ROLE so every object is created as misconduct_user.
 # ----------------------------------------------------------
-info "Loading database schema (as postgres superuser)..."
-sudo -u postgres psql -d misconduct_db \
-    -f "$APP_DIR/database/schema-enhanced.sql" \
-    && info "Schema loaded successfully." \
-    || err_exit "Schema load failed. Check database/schema-enhanced.sql."
+info "Loading database schema..."
 
-# Quick smoke-test: verify the app user can now connect with a password
-info "Testing misconduct_user password login..."
+SCHEMA_TMP=$(mktemp /tmp/schema-XXXXXX.sql)
+chmod 644 "$SCHEMA_TMP"
+
+# Wrap the schema: set role → load → reset role
+cat > "$SCHEMA_TMP" <<WRAPPER
+SET ROLE misconduct_user;
+$(cat "$APP_DIR/database/schema-enhanced.sql")
+RESET ROLE;
+WRAPPER
+
+sudo -u postgres psql -d misconduct_db -f "$SCHEMA_TMP" \
+    && info "Schema loaded successfully." \
+    || { rm -f "$SCHEMA_TMP"; err_exit "Schema load failed — see errors above."; }
+
+rm -f "$SCHEMA_TMP"
+
+# ----------------------------------------------------------
+# Smoke-test: confirm the app user can connect via TCP
+# ----------------------------------------------------------
+info "Testing misconduct_user TCP password login..."
 PGPASSWORD="${DB_PASSWORD}" psql \
-    -h 127.0.0.1 -U misconduct_user -d misconduct_db \
-    -c "SELECT 'connection ok' AS status;" \
+    -h 127.0.0.1 -p 5432 \
+    -U misconduct_user -d misconduct_db \
+    -c "SELECT COUNT(*) AS incident_types_seeded FROM incident_types;" \
     && info "Password authentication confirmed." \
-    || err_exit "Password auth test failed — check ${HBA_FILE} and reload postgresql."
+    || err_exit "TCP password auth failed — check ${HBA_FILE} and run: systemctl reload postgresql"
 
 # ==========================================================
 # STEP 3 — Application system user
@@ -166,13 +197,13 @@ source venv/bin/activate
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
 
-# Generate secret key
 SECRET_KEY=$(openssl rand -hex 32)
 
 if [ ! -f .env ]; then
     cat > .env <<ENVEOF
 # ---- Database ----
-# Uses TCP (127.0.0.1) so pg_hba.conf password auth applies
+# Must use 127.0.0.1 (TCP) — not localhost (Unix socket) —
+# so pg_hba.conf password auth rules apply at runtime.
 DATABASE_URL=postgresql://misconduct_user:${DB_PASSWORD}@127.0.0.1:5432/misconduct_db
 
 # ---- Security ----
@@ -185,7 +216,7 @@ API_HOST=0.0.0.0
 API_PORT=8000
 DEBUG=False
 
-# ---- CORS (add your server IP / domain after installing) ----
+# ---- CORS ----
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost
 
 # ---- App metadata ----
@@ -195,10 +226,10 @@ ENVEOF
     info "backend/.env created."
 else
     warn "backend/.env already exists — skipping generation."
-    # Ensure the existing .env uses TCP not the Unix socket
+    # Silently fix localhost → 127.0.0.1 if needed
     if grep -q "@localhost:" .env; then
         sed -i 's|@localhost:|@127.0.0.1:|g' .env
-        info "Updated DATABASE_URL to use 127.0.0.1 (TCP) instead of localhost (Unix socket)."
+        info "DATABASE_URL updated to use 127.0.0.1 (TCP)."
     fi
 fi
 
@@ -220,10 +251,9 @@ npm install --loglevel=error
 
 if [ ! -f .env ]; then
     cat > .env <<ENVEOF
-# For production (traffic routed through Nginx /api/ proxy):
+# Production: requests go through Nginx /api/ proxy
 REACT_APP_API_URL=/api
-
-# For local dev against the FastAPI server directly, use:
+# Dev: point directly at FastAPI
 # REACT_APP_API_URL=http://localhost:8000
 ENVEOF
     info "frontend/.env created."
@@ -242,9 +272,9 @@ chown -R misconduct:misconduct "$APP_DIR"
 chmod -R 755 "$FRONTEND_DIR/build"
 
 # ==========================================================
-# STEP 7 — systemd service for FastAPI backend
+# STEP 7 — systemd service
 # ==========================================================
-info "Step 7: Creating systemd service for the backend..."
+info "Step 7: Creating systemd service for backend..."
 
 cat > /etc/systemd/system/misconduct-backend.service <<SVCEOF
 [Unit]
@@ -276,7 +306,7 @@ systemctl start misconduct-backend
 sleep 2
 systemctl is-active --quiet misconduct-backend \
     && info "Backend service started successfully." \
-    || warn "Backend service did not start — check: journalctl -u misconduct-backend"
+    || warn "Backend did not start — check: journalctl -u misconduct-backend"
 
 # ==========================================================
 # STEP 8 — Nginx
@@ -324,7 +354,7 @@ ln -sf /etc/nginx/sites-available/misconduct-db \
 
 nginx -t && systemctl restart nginx \
     && info "Nginx configured and restarted." \
-    || err_exit "Nginx config test failed — check /etc/nginx/sites-available/misconduct-db"
+    || err_exit "Nginx config test failed."
 
 # ==========================================================
 # STEP 9 — UFW firewall
@@ -358,4 +388,3 @@ echo "    sudo nginx -t"
 echo ""
 echo "  To add your domain / SSL later, see QUICKSTART.md."
 echo "========================================================="
-
