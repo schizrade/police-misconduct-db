@@ -191,7 +191,7 @@ info "Step 4: Setting up Python backend..."
 BACKEND_DIR="$APP_DIR/backend"
 cd "$BACKEND_DIR"
 
-python3.11 -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 
 pip install --upgrade pip -q
