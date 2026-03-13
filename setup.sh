@@ -34,7 +34,7 @@ info "Step 1: Updating apt and installing system dependencies..."
 apt update -qq
 apt install -y \
     curl wget gnupg lsb-release ca-certificates \
-    python3.11 python3.11-venv python3.11-dev python3-pip \
+    python3 python3-venv python3-dev python3-pip \
     postgresql postgresql-contrib \
     nginx \
     libpq-dev \
@@ -358,3 +358,4 @@ echo "    sudo nginx -t"
 echo ""
 echo "  To add your domain / SSL later, see QUICKSTART.md."
 echo "========================================================="
+
