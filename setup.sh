@@ -67,11 +67,38 @@ info "Step 2: Configuring PostgreSQL..."
 systemctl start postgresql
 systemctl enable postgresql
 
+# ----------------------------------------------------------
+# Patch pg_hba.conf so that misconduct_user (and any other
+# non-system user) can authenticate with a password over the
+# local Unix socket.  Ubuntu's default is "peer" for local
+# connections, which only works when the OS username matches
+# the PostgreSQL username — misconduct_user is not an OS user.
+#
+# We insert a scram-sha-256 rule for misconduct_user BEFORE
+# the existing local rules so it takes priority.
+# ----------------------------------------------------------
+PG_VERSION=$(pg_lsclusters -h | awk 'NR==1{print $1}')
+HBA_FILE="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
+
+info "Patching pg_hba.conf at ${HBA_FILE} ..."
+
+# Only add the rule if it isn't already there
+if ! grep -q "misconduct_user" "$HBA_FILE"; then
+    # Insert after the "# TYPE" header comment block (first non-comment line)
+    sed -i '/^local\s/i # Added by misconduct-db setup\nlocal   misconduct_db   misconduct_user                 scram-sha-256\nhost    misconduct_db   misconduct_user  127.0.0.1/32    scram-sha-256\nhost    misconduct_db   misconduct_user  ::1/128         scram-sha-256' "$HBA_FILE"
+    info "pg_hba.conf updated — misconduct_user may now log in with a password."
+else
+    info "pg_hba.conf already contains a rule for misconduct_user — skipping."
+fi
+
+systemctl reload postgresql
+
 echo ""
 read -sp "  Enter a password for the database user 'misconduct_user': " DB_PASSWORD
 echo ""
 [ -z "$DB_PASSWORD" ] && err_exit "Database password cannot be empty."
 
+# Create the role and database as the postgres superuser (peer auth — always works)
 sudo -u postgres psql <<SQL
 DO \$\$
 BEGIN
@@ -88,13 +115,31 @@ CREATE DATABASE misconduct_db OWNER misconduct_user;
 GRANT ALL PRIVILEGES ON DATABASE misconduct_db TO misconduct_user;
 SQL
 
-sudo -u postgres psql -d misconduct_db -c "GRANT ALL ON SCHEMA public TO misconduct_user;"
+# Grant schema-level privileges (run as postgres on the target db)
+sudo -u postgres psql -d misconduct_db <<SQL
+GRANT ALL ON SCHEMA public TO misconduct_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO misconduct_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO misconduct_user;
+SQL
 
-info "Loading database schema..."
-sudo -u postgres psql -U misconduct_user -d misconduct_db \
+# ----------------------------------------------------------
+# Load the schema as the postgres superuser — avoids peer
+# auth entirely.  The schema itself grants ownership/privs
+# to misconduct_user via the OWNER clauses and seed INSERTs.
+# ----------------------------------------------------------
+info "Loading database schema (as postgres superuser)..."
+sudo -u postgres psql -d misconduct_db \
     -f "$APP_DIR/database/schema-enhanced.sql" \
     && info "Schema loaded successfully." \
     || err_exit "Schema load failed. Check database/schema-enhanced.sql."
+
+# Quick smoke-test: verify the app user can now connect with a password
+info "Testing misconduct_user password login..."
+PGPASSWORD="${DB_PASSWORD}" psql \
+    -h 127.0.0.1 -U misconduct_user -d misconduct_db \
+    -c "SELECT 'connection ok' AS status;" \
+    && info "Password authentication confirmed." \
+    || err_exit "Password auth test failed — check ${HBA_FILE} and reload postgresql."
 
 # ==========================================================
 # STEP 3 — Application system user
@@ -127,7 +172,8 @@ SECRET_KEY=$(openssl rand -hex 32)
 if [ ! -f .env ]; then
     cat > .env <<ENVEOF
 # ---- Database ----
-DATABASE_URL=postgresql://misconduct_user:${DB_PASSWORD}@localhost:5432/misconduct_db
+# Uses TCP (127.0.0.1) so pg_hba.conf password auth applies
+DATABASE_URL=postgresql://misconduct_user:${DB_PASSWORD}@127.0.0.1:5432/misconduct_db
 
 # ---- Security ----
 SECRET_KEY=${SECRET_KEY}
@@ -149,6 +195,11 @@ ENVEOF
     info "backend/.env created."
 else
     warn "backend/.env already exists — skipping generation."
+    # Ensure the existing .env uses TCP not the Unix socket
+    if grep -q "@localhost:" .env; then
+        sed -i 's|@localhost:|@127.0.0.1:|g' .env
+        info "Updated DATABASE_URL to use 127.0.0.1 (TCP) instead of localhost (Unix socket)."
+    fi
 fi
 
 mkdir -p uploads
