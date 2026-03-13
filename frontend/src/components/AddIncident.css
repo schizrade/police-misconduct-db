@@ -1,0 +1,14 @@
+.add-incident h2 { margin-bottom: 2rem; color: #2c3e50; }
+.incident-form { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.form-section { margin-bottom: 2.5rem; padding-bottom: 2rem; border-bottom: 2px solid #ecf0f1; }
+.form-section:last-of-type { border-bottom: none; }
+.form-section h3 { margin-bottom: 1.5rem; color: #2c3e50; }
+.form-group { margin-bottom: 1.5rem; }
+.form-group label { display: block; margin-bottom: 0.5rem; font-weight: 500; color: #555; }
+.form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; font-family: inherit; }
+.form-group textarea { resize: vertical; min-height: 100px; }
+.form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+.checkbox-group { margin-bottom: 1rem; }
+.checkbox-group label { display: flex; align-items: center; font-weight: 500; color: #555; cursor: pointer; }
+.checkbox-group input[type="checkbox"] { width: auto; margin-right: 0.75rem; cursor: pointer; }
+.form-actions { display: flex; gap: 1rem; margin-top: 2rem; padding-top: 2rem; border-top: 2px solid #ecf0f1; }

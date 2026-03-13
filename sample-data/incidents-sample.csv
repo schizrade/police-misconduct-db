@@ -1,0 +1,6 @@
+incident_date,department_name,officer_badge,incident_type,description,location_city,location_state,use_of_force,death_occurred
+2024-01-15,Fort Worth Police Department,1001,Excessive Force,Officer used excessive force during routine traffic stop. Civilian was pulled from vehicle and subjected to unnecessary physical restraint despite compliance.,Fort Worth,TX,true,false
+2024-02-03,Dallas Police Department,2001,Unlawful Search,Officer conducted search of vehicle without proper probable cause or consent. No contraband was found.,Dallas,TX,false,false
+2023-11-20,Fort Worth Police Department,1002,Racial Profiling,Officer stopped civilian without reasonable suspicion. Stop appeared to be based solely on race of driver.,Fort Worth,TX,false,false
+2024-01-28,Arlington Police Department,3001,Harassment,Verbal harassment and intimidation during welfare check. Officer used threatening language without justification.,Arlington,TX,false,false
+2023-12-08,Dallas Police Department,2002,False Arrest,Arrest made without probable cause. Charges were later dismissed due to lack of evidence.,Dallas,TX,true,false

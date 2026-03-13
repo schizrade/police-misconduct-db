@@ -1,0 +1,7 @@
+badge_number,first_name,last_name,department_name,rank,status
+1001,John,Smith,Fort Worth Police Department,Officer,active
+1002,Sarah,Johnson,Fort Worth Police Department,Sergeant,active
+2001,Michael,Davis,Dallas Police Department,Officer,active
+2002,Jennifer,Martinez,Dallas Police Department,Detective,suspended
+3001,Robert,Williams,Arlington Police Department,Officer,active
+3002,Lisa,Brown,Arlington Police Department,Corporal,active

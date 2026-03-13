@@ -1,0 +1,14 @@
+.detail-header { display: flex; align-items: center; margin-bottom: 2rem; gap: 2rem; }
+.back-link { color: #3498db; text-decoration: none; font-weight: 500; }
+.back-link:hover { text-decoration: underline; }
+.detail-header h2 { color: #2c3e50; margin: 0; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 2rem; }
+.detail-section { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.detail-section.full-width { grid-column: 1 / -1; }
+.detail-section h3 { margin-bottom: 1.5rem; color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 0.5rem; }
+.detail-row { display: flex; padding: 0.75rem 0; border-bottom: 1px solid #ecf0f1; }
+.detail-row:last-child { border-bottom: none; }
+.detail-row .label { font-weight: 600; color: #555; min-width: 150px; margin-right: 1rem; }
+.detail-row p { flex: 1; margin: 0; color: #333; line-height: 1.6; }
+.fatal-yes { color: #c33; font-weight: 700; }
+.outcome-card, .complaint-card { background: #f8f9fa; padding: 1.5rem; border-radius: 4px; margin-bottom: 1rem; border-left: 4px solid #3498db; }
